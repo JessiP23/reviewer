@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: reviewer
+      POSTGRES_USER: reviewer
+      POSTGRES_PASSWORD: reviewer
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reviewer -d reviewer"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ./backend
+      target: development
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://reviewer:reviewer@postgres:5432/reviewer
+      CORS_ORIGINS: http://localhost:3000
+      MAX_UPLOAD_BYTES: "10485760"
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/src:/app/src
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: development
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_INTERNAL_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+
+volumes:
+  postgres_data:

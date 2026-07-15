@@ -1,0 +1,61 @@
+schema {
+  query: Query
+}
+
+type Query {
+  review(id: ID!): ReviewType
+  reviews(first: Int! = 20): [ReviewType!]!
+}
+
+type ReviewType {
+  id: ID!
+  filename: String!
+  status: String!
+  findings: [FindingType!]!
+  metrics: [MetricType!]!
+  diagnostics: DiagnosticType
+  error: String
+  ruleVersion: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type FindingType {
+  code: String!
+  title: String!
+  category: String!
+  severity: String!
+  explanation: String!
+  recommendation: String!
+  confidence: Float!
+  evidence: [EvidenceType!]!
+  requiresHumanReview: Boolean!
+}
+
+type MetricType {
+  key: String!
+  label: String!
+  value: Float!
+  unit: String!
+  confidence: Float!
+  evidence: [EvidenceType!]!
+}
+
+type EvidenceType {
+  text: String!
+  source: String!
+  page: Int
+  sheet: String
+  cellRange: String
+}
+
+type DiagnosticType {
+  parser: String!
+  blocks: Int!
+  characters: Int!
+  warnings: [String!]!
+  coverage: Float!
+}
+
+scalar DateTime
+

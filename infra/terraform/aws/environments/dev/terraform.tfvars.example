@@ -1,0 +1,16 @@
+project_name  = "reviewer"
+environment   = "dev"
+aws_region    = "us-east-2"
+
+# Cost safety: begin with both false and review the plan.
+enable_database = false
+deploy_compute  = false
+
+# After building and pushing the backend Lambda image:
+# enable_database = true
+# deploy_compute  = true
+# lambda_image_uri = "123456789012.dkr.ecr.us-east-2.amazonaws.com/reviewer-dev@sha256:..."
+
+protect_database       = false
+document_retention_days = 7
+

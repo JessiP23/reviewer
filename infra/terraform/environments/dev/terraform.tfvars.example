@@ -1,0 +1,8 @@
+project_id          = "your-google-cloud-project"
+region              = "us-east1"
+environment         = "dev"
+deploy_services     = false
+allow_public_access = false
+# api_image = "us-east1-docker.pkg.dev/PROJECT/reviewer-dev/api@sha256:..."
+# web_image = "us-east1-docker.pkg.dev/PROJECT/reviewer-dev/web@sha256:..."
+
