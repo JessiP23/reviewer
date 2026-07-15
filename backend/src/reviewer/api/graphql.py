@@ -106,6 +106,8 @@ class ReviewType:
     metrics: list[MetricType]
     diagnostics: DiagnosticType | None
     error: str | None
+    human_feedback: str | None
+    human_decision: str | None
     rule_version: str
     created_at: datetime
     updated_at: datetime
@@ -124,6 +126,8 @@ class ReviewType:
                 else DiagnosticType.from_domain(review.diagnostics)
             ),
             error=review.error,
+            human_feedback=review.human_feedback,
+            human_decision=review.human_decision,
             rule_version=review.rule_version,
             created_at=review.created_at,
             updated_at=review.updated_at,

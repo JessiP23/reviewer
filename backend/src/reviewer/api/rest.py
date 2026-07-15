@@ -23,6 +23,10 @@ class ReviewAccepted(BaseModel):
     status: ReviewStatus
 
 
+class HumanReviewRequest(BaseModel):
+    feedback: str | None = None
+
+
 @router.post("/reviews", response_model=ReviewAccepted, status_code=status.HTTP_202_ACCEPTED)
 async def create_review(
     request: Request,
@@ -87,3 +91,29 @@ async def review_events(request: Request, review_id: str) -> StreamingResponse:
             await asyncio.sleep(0.75)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@router.post("/reviews/{review_id}/approve")
+async def approve_review(
+    request: Request,
+    review_id: str,
+    body: HumanReviewRequest | None = None,
+) -> ReviewAccepted:
+    service: ReviewService = request.app.state.review_service
+    review = await service.approve(review_id, body.feedback if body else None)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found.")
+    return ReviewAccepted(id=review.id, status=review.status)
+
+
+@router.post("/reviews/{review_id}/reject")
+async def reject_review(
+    request: Request,
+    review_id: str,
+    body: HumanReviewRequest | None = None,
+) -> ReviewAccepted:
+    service: ReviewService = request.app.state.review_service
+    review = await service.reject(review_id, body.feedback if body else None)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found.")
+    return ReviewAccepted(id=review.id, status=review.status)

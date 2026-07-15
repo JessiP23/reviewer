@@ -92,5 +92,27 @@ class ReviewService:
         review.touch()
         await self._repository.save(review)
 
+    async def approve(self, review_id: str, feedback: str | None = None) -> Review | None:
+        review = await self._repository.get(review_id)
+        if review is None:
+            return None
+        review.status = ReviewStatus.COMPLETED
+        review.human_decision = "approved"
+        review.human_feedback = feedback
+        review.touch()
+        await self._repository.save(review)
+        return review
+
+    async def reject(self, review_id: str, feedback: str | None = None) -> Review | None:
+        review = await self._repository.get(review_id)
+        if review is None:
+            return None
+        review.status = ReviewStatus.REJECTED
+        review.human_decision = "rejected"
+        review.human_feedback = feedback
+        review.touch()
+        await self._repository.save(review)
+        return review
+
     async def list(self, tenant_id: str = "demo", limit: int = 50) -> list[Review]:
         return await self._repository.list(tenant_id, limit)

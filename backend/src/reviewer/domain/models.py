@@ -13,6 +13,7 @@ class ReviewStatus(StrEnum):
     ANALYZING = "analyzing"
     COMPLETED = "completed"
     NEEDS_REVIEW = "needs_review"
+    REJECTED = "rejected"
     FAILED = "failed"
 
 
@@ -75,6 +76,8 @@ class Review(BaseModel):
     metrics: list[Metric] = Field(default_factory=list)
     diagnostics: ExtractionDiagnostic | None = None
     error: str | None = None
+    human_feedback: str | None = None
+    human_decision: str | None = None
     rule_version: str = "financial-core/1.0.0"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
