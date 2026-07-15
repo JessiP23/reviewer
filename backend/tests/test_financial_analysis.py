@@ -62,3 +62,36 @@ def test_redacts_sensitive_evidence() -> None:
     _, findings = analyze(document)
     assert findings[0].code == "PII_SSN"
     assert "123-45-6789" not in findings[0].evidence[0].text
+
+
+def test_pdf_line_level_extraction_and_analysis() -> None:
+    import fitz  # type: ignore[import-untyped]
+
+    doc = fitz.open()
+    page = doc.new_page()
+    rows = [
+        ("Revenue", "$1,000", 100),
+        ("Cost of goods sold", "(500)", 130),
+        ("Gross profit", "$500", 160),
+        ("Total assets", "$5,000", 200),
+        ("Total liabilities", "$2,000", 230),
+        ("Owners' equity", "$3,000", 260),
+    ]
+    for label, value, y in rows:
+        page.insert_text((50, y), label, fontsize=12)
+        page.insert_text((300, y), value, fontsize=12)
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    document = ExtractorRegistry().extract("statement.pdf", pdf_bytes)
+    metrics, findings = analyze(document)
+
+    values = {metric.key: metric.value for metric in metrics}
+    assert values["revenue"] == 1_000
+    assert values["cogs"] == 500
+    assert values["gross_profit"] == 500
+    assert values["total_assets"] == 5_000
+    assert values["total_liabilities"] == 2_000
+    assert values["equity"] == 3_000
+    assert not findings

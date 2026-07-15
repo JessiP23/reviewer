@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 
 from reviewer.domain.models import Evidence, Finding, Metric, Severity
@@ -53,14 +54,36 @@ METRIC_PATTERNS = (
     MetricPattern(
         "total_liabilities",
         "Total liabilities",
-        re.compile(r"\btotal liabilities\b", re.I),
+        re.compile(
+            r"\btotal liabilities\b"
+            r"(?! *(?:and|&|\+|plus) *(?:owners'|shareholders'|stockholders') equity)",
+            re.I,
+        ),
+    ),
+    MetricPattern(
+        "total_liabilities_and_equity",
+        "Total liabilities and equity",
+        re.compile(
+            r"\btotal liabilities (?:and|&|\+|plus) "
+            r"(?:owners'|shareholders'|stockholders') equity\b",
+            re.I,
+        ),
     ),
     MetricPattern(
         "equity",
         "Owners' equity",
-        re.compile(r"\b(?:total )?(?:owners?'|shareholders?')?\s*equity\b", re.I),
+        re.compile(
+            r"\b(?:total\s+(?:owners?'|shareholders?'|stockholders?')?\s*equity|"
+            r"(?<!liabilities and )(?<!liabilities & )(?<!liabilities plus )"
+            r"(?:owners?'|shareholders?'|stockholders?') equity)\b(?!:)",
+            re.I,
+        ),
     ),
-    MetricPattern("debt", "Total debt", re.compile(r"\b(?:total debt|borrowings)\b", re.I)),
+    MetricPattern(
+        "debt",
+        "Total debt",
+        re.compile(r"\b(?:total debt|borrowings|notes payable)\b", re.I),
+    ),
 )
 
 NUMBER_PATTERN = re.compile(
@@ -92,28 +115,34 @@ def parse_number(raw: re.Match[str]) -> float:
 
 def extract_metrics(document: ExtractedDocument) -> list[Metric]:
     metrics: list[Metric] = []
-    seen: set[str] = set()
+    blocks_by_page: defaultdict[int | None, list[ExtractedBlock]] = defaultdict(list)
     for block in document.blocks:
-        for definition in METRIC_PATTERNS:
-            if definition.key in seen or not definition.pattern.search(block.text):
-                continue
-            label_end = definition.pattern.search(block.text)
-            assert label_end is not None
-            candidates = list(NUMBER_PATTERN.finditer(block.text[label_end.end() :]))
-            if not candidates:
-                continue
-            value = parse_number(candidates[-1])
-            metrics.append(
-                Metric(
-                    key=definition.key,
-                    label=definition.label,
-                    value=value,
-                    unit="currency",
-                    confidence=0.96,
-                    evidence=[_evidence(block)],
+        blocks_by_page[block.page].append(block)
+    for page in sorted(blocks_by_page, key=lambda p: p if p is not None else -1):
+        seen: set[str] = set()
+        for block in blocks_by_page[page]:
+            for definition in METRIC_PATTERNS:
+                if definition.key in seen or not definition.pattern.search(block.text):
+                    continue
+                label_end = definition.pattern.search(block.text)
+                assert label_end is not None
+                candidates = list(NUMBER_PATTERN.finditer(block.text[label_end.end() :]))
+                if not candidates:
+                    continue
+                value = parse_number(candidates[0])
+                if definition.key == "cogs":
+                    value = abs(value)
+                metrics.append(
+                    Metric(
+                        key=definition.key,
+                        label=definition.label,
+                        value=value,
+                        unit="currency",
+                        confidence=0.96,
+                        evidence=[_evidence(block)],
+                    )
                 )
-            )
-            seen.add(definition.key)
+                seen.add(definition.key)
     return metrics
 
 
@@ -140,6 +169,25 @@ def _derived_metric(
 def add_derived_metrics(metrics: list[Metric]) -> list[Metric]:
     by_key = {metric.key: metric for metric in metrics}
     derived: list[Metric] = []
+
+    if (
+        "total_liabilities" not in by_key
+        and "total_liabilities_and_equity" in by_key
+        and "equity" in by_key
+    ):
+        tle = by_key["total_liabilities_and_equity"]
+        equity = by_key["equity"]
+        derived.append(
+            Metric(
+                key="total_liabilities",
+                label="Total liabilities",
+                value=tle.value - equity.value,
+                unit="currency",
+                confidence=min(tle.confidence, equity.confidence),
+                evidence=[*tle.evidence, *equity.evidence],
+            )
+        )
+
     specifications = (
         ("gross_margin", "Gross margin", "gross_profit", "revenue", "percent"),
         ("net_margin", "Net margin", "net_income", "revenue", "percent"),
@@ -213,7 +261,7 @@ def _numeric_rules(metrics: list[Metric]) -> list[Finding]:
             values["cogs"],
             values["gross_profit"],
         )
-        difference = gross_profit.value - (revenue.value - cogs.value)
+        difference = gross_profit.value - (revenue.value - abs(cogs.value))
         tolerance = max(abs(revenue.value) * 0.01, 1)
         if abs(difference) > tolerance:
             findings.append(
@@ -340,5 +388,21 @@ def _text_rules(document: ExtractedDocument) -> list[Finding]:
 
 
 def analyze(document: ExtractedDocument) -> tuple[list[Metric], list[Finding]]:
-    metrics = add_derived_metrics(extract_metrics(document))
-    return metrics, [*_numeric_rules(metrics), *_text_rules(document)]
+    metrics = extract_metrics(document)
+    by_page: dict[int | None, list[Metric]] = defaultdict(list)
+    for metric in metrics:
+        page = metric.evidence[0].page if metric.evidence else None
+        by_page[page].append(metric)
+
+    all_metrics: list[Metric] = []
+    all_findings: list[Finding] = []
+    for page in sorted(by_page, key=lambda p: p if p is not None else -1):
+        page_metrics = add_derived_metrics(by_page[page])
+        all_metrics.extend(page_metrics)
+        all_findings.extend(_numeric_rules(page_metrics))
+
+    all_findings.extend(_text_rules(document))
+    # Deduplicate by key, keeping the last occurrence (later pages) when a label
+    # appears in multiple statements.
+    deduplicated = {metric.key: metric for metric in all_metrics}
+    return list(deduplicated.values()), all_findings

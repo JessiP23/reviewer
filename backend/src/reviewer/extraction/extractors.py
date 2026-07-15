@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from openpyxl import load_workbook
 
@@ -81,17 +81,55 @@ class PdfExtractor:
     def extract(self, filename: str, content: bytes) -> ExtractedDocument:
         import fitz  # type: ignore[import-untyped]
 
+        from reviewer.analysis.financial import NUMBER_PATTERN
+
         blocks: list[ExtractedBlock] = []
         warnings: list[str] = []
         offset = 0
+        _CONNECTORS = frozenset({"and", "&", "+", "or"})
+
+        def _is_number_line(text: str) -> bool:
+            text = text.strip()
+            if not text:
+                return False
+            return NUMBER_PATTERN.fullmatch(text) is not None
+
         with fitz.open(stream=content, filetype="pdf") as document:
             for page_number, page in enumerate(document, start=1):
-                text = page.get_text("text").strip()
-                if not text:
+                page_text = page.get_text("text")
+                if not page_text.strip():
                     warnings.append(f"Page {page_number} has no embedded text; OCR is required.")
                     continue
-                blocks.append(_block(text, filename, offset, page=page_number))
-                offset += len(text) + 1
+
+                raw_lines = [line for line in page_text.splitlines() if line.strip()]
+                merged_lines: list[str] = []
+                i = 0
+                while i < len(raw_lines):
+                    line = raw_lines[i].strip()
+                    i += 1
+                    # Merge wrapped connector lines such as
+                    # "Total liabilities and" + "owners' equity".
+                    while i < len(raw_lines) and line.split()[-1].lower() in _CONNECTORS:
+                        line = f"{line} {raw_lines[i].strip()}"
+                        i += 1
+                    # Merge a label line with any following number-only line(s).
+                    while i < len(raw_lines) and _is_number_line(raw_lines[i]):
+                        line = f"{line} {raw_lines[i].strip()}"
+                        i += 1
+                    merged_lines.append(line)
+
+                for line_no, line in enumerate(merged_lines, start=1):
+                    blocks.append(
+                        _block(
+                            line,
+                            filename,
+                            offset,
+                            page=page_number,
+                            cell_range=f"L{line_no}",
+                            kind="line",
+                        )
+                    )
+                    offset += len(line) + 1
         return ExtractedDocument(
             filename=filename,
             parser="pymupdf",
@@ -157,11 +195,80 @@ class XlsxExtractor:
         return ExtractedDocument(filename=filename, parser="openpyxl", blocks=blocks)
 
 
+class DoclingExtractor:
+    extensions = frozenset({".pdf"})
+
+    def __init__(self) -> None:
+        import importlib
+
+        self._converter: Any | None = None
+        try:
+            docling_mod = importlib.import_module("docling.document_converter")
+            converter = docling_mod.DocumentConverter
+        except Exception:
+            self.extensions = frozenset()
+        else:
+            self._converter = converter
+
+    def extract(self, filename: str, content: bytes) -> ExtractedDocument:
+        import os
+        import tempfile
+
+        if self._converter is None:
+            raise UnsupportedDocumentError("Docling is not installed.")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            result = self._converter().convert(tmp_path)
+            doc = result.document
+            page_contents: dict[int, list[str]] = {}
+            for item in doc.texts:
+                if not item.text:
+                    continue
+                page = item.prov[0].page if item.prov else 1
+                page_contents.setdefault(page, []).append(item.text)
+            for table in doc.tables:
+                table_md = table.export_to_markdown(doc)
+                if not table_md:
+                    continue
+                page = table.prov[0].page if table.prov else 1
+                page_contents.setdefault(page, []).append(table_md)
+
+            blocks: list[ExtractedBlock] = []
+            offset = 0
+            for page in sorted(page_contents):
+                page_text = "\n".join(page_contents[page])
+                blocks.append(
+                    _block(
+                        page_text,
+                        filename,
+                        offset,
+                        page=page,
+                        kind="docling-page",
+                    )
+                )
+                offset += len(page_text) + 1
+            return ExtractedDocument(
+                filename=filename,
+                parser="docling",
+                blocks=blocks,
+                warnings=[],
+            )
+        except Exception as exc:
+            raise UnsupportedDocumentError(f"Docling conversion failed: {exc}") from exc
+        finally:
+            os.unlink(tmp_path)
+
+
 class ExtractorRegistry:
     def __init__(self, extractors: list[Extractor] | None = None) -> None:
         self._extractors = extractors or [
             PlainTextExtractor(),
             CsvExtractor(),
+            DoclingExtractor(),
             PdfExtractor(),
             DocxExtractor(),
             XlsxExtractor(),
@@ -175,7 +282,10 @@ class ExtractorRegistry:
         extension = Path(filename).suffix.lower()
         for extractor in self._extractors:
             if extension in extractor.extensions:
-                return extractor.extract(filename, content)
+                try:
+                    return extractor.extract(filename, content)
+                except UnsupportedDocumentError:
+                    continue
         supported = ", ".join(sorted(self.supported_extensions))
         raise UnsupportedDocumentError(
             f"Unsupported file type {extension!r}; expected {supported}."
