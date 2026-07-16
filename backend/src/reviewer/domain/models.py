@@ -13,6 +13,7 @@ class ReviewStatus(StrEnum):
     ANALYZING = "analyzing"
     COMPLETED = "completed"
     NEEDS_REVIEW = "needs_review"
+    REJECTED = "rejected"
     FAILED = "failed"
 
 
@@ -54,6 +55,8 @@ class Metric(BaseModel):
     period: str | None = None
     confidence: float = Field(default=1, ge=0, le=1)
     evidence: list[Evidence] = Field(default_factory=list)
+    raw: str | None = None
+    status: str | None = None
 
 
 class ExtractionDiagnostic(BaseModel):
@@ -75,6 +78,9 @@ class Review(BaseModel):
     metrics: list[Metric] = Field(default_factory=list)
     diagnostics: ExtractionDiagnostic | None = None
     error: str | None = None
+    human_feedback: str | None = None
+    human_decision: str | None = None
+    document_key: str | None = None
     rule_version: str = "financial-core/1.0.0"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

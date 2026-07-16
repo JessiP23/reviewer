@@ -2,9 +2,10 @@
 
 Reviewer Agent (product UI: **LedgerLens**) is a local-first financial document
 review system for small and midsize businesses. It extracts evidence from PDF,
-XLSX, CSV, DOCX, Markdown, JSON, and text files; calculates business-health
-metrics; applies auditable accounting and risk rules; and streams review
-progress to a Next.js + Relay dashboard.
+scanned PDFs, images, XLSX, CSV, DOCX, Markdown, JSON, and text files;
+calculates business-health metrics; applies auditable accounting and risk rules;
+surfaces findings in a Next.js + Relay dashboard; and exposes an agent
+orchestration UI with human-in-the-loop approval.
 
 The project deliberately matches the supplied target stack:
 
@@ -27,7 +28,8 @@ docker compose up --build
 
 Open http://localhost:3000. Upload a supported document and watch its findings
 arrive. API health is at http://localhost:8000/health and GraphiQL is at
-http://localhost:8000/graphql.
+http://localhost:8000/graphql. The agent orchestration UI is at
+http://localhost:3000/agent.
 
 The dashboard requires the API; do not run `npm --prefix frontend run dev` by
 itself unless the Python API is already running and `NEXT_PUBLIC_API_URL` points
@@ -37,8 +39,9 @@ them with `docker compose down`.
 
 For setup without containers, architecture decisions, accuracy guarantees, and
 the delivery plan, see [docs/BOOTSTRAP_COMMANDS.md](docs/BOOTSTRAP_COMMANDS.md),
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and
-[docs/ACCURACY_AND_SAFETY.md](docs/ACCURACY_AND_SAFETY.md). The supplied
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/ACCURACY_AND_SAFETY.md](docs/ACCURACY_AND_SAFETY.md), and
+[docs/END_TO_END_ORCHESTRATION.md](docs/END_TO_END_ORCHESTRATION.md). The supplied
 technology report is assessed in [docs/RESEARCH_REVIEW.md](docs/RESEARCH_REVIEW.md),
 and the interview mapping is in [docs/ROLE_ALIGNMENT.md](docs/ROLE_ALIGNMENT.md).
 See [docs/VERIFICATION.md](docs/VERIFICATION.md) for the exact checks completed

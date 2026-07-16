@@ -9,6 +9,7 @@ from reviewer.extraction import ExtractorRegistry, UnsupportedDocumentError
 def test_extracts_workbook_cells_with_provenance() -> None:
     workbook = Workbook()
     sheet = workbook.active
+    assert sheet is not None
     sheet.title = "P&L"
     sheet.append(["Revenue", 125000])
     stream = BytesIO()
@@ -25,4 +26,3 @@ def test_extracts_workbook_cells_with_provenance() -> None:
 def test_rejects_unknown_extension() -> None:
     with pytest.raises(UnsupportedDocumentError):
         ExtractorRegistry().extract("archive.zip", b"data")
-

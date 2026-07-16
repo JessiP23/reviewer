@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import io
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from openpyxl import load_workbook
 
@@ -39,6 +40,63 @@ def _block(
         cell_range=cell_range if isinstance(cell_range, str) else None,
         kind=str(location.get("kind") or "text"),
     )
+
+
+class _OcrHelper:
+    """Optional OCR helper for images and scanned PDFs.
+
+    Uses pytesseract + Pillow when the [ocr] optional dependency group is
+    installed and the Tesseract binary is available. The helper loads lazily
+    and fails silently so the rest of the app can run without OCR.
+    """
+
+    def __init__(self) -> None:
+        self._available = False
+        self._pytesseract: Any | None = None
+        self._Image: Any | None = None
+        try:
+            self._pytesseract = importlib.import_module("pytesseract")
+            self._Image = importlib.import_module("PIL.Image")
+            self._pytesseract.get_tesseract_version()
+            self._available = True
+        except Exception:
+            pass
+
+    def read_image(self, image_bytes: bytes) -> str | None:
+        if not self._available or self._Image is None or self._pytesseract is None:
+            return None
+        image = self._Image.open(io.BytesIO(image_bytes))
+        return str(self._pytesseract.image_to_string(image)).strip()
+
+
+_CONNECTORS = frozenset({"and", "&", "+", "or"})
+
+
+def _is_number_line(text: str) -> bool:
+    text = text.strip()
+    if not text:
+        return False
+    from reviewer.analysis.financial import NUMBER_PATTERN
+
+    return NUMBER_PATTERN.fullmatch(text) is not None
+
+
+def _merge_text_lines(page_text: str) -> list[str]:
+    """Merge wrapped connector lines and label-number pairs in extracted text."""
+    raw_lines = [line for line in page_text.splitlines() if line.strip()]
+    merged_lines: list[str] = []
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i].strip()
+        i += 1
+        while i < len(raw_lines) and line.split()[-1].lower() in _CONNECTORS:
+            line = f"{line} {raw_lines[i].strip()}"
+            i += 1
+        while i < len(raw_lines) and _is_number_line(raw_lines[i]):
+            line = f"{line} {raw_lines[i].strip()}"
+            i += 1
+        merged_lines.append(line)
+    return merged_lines
 
 
 class PlainTextExtractor:
@@ -84,14 +142,44 @@ class PdfExtractor:
         blocks: list[ExtractedBlock] = []
         warnings: list[str] = []
         offset = 0
+        ocr = _OcrHelper()
+
         with fitz.open(stream=content, filetype="pdf") as document:
             for page_number, page in enumerate(document, start=1):
-                text = page.get_text("text").strip()
-                if not text:
-                    warnings.append(f"Page {page_number} has no embedded text; OCR is required.")
-                    continue
-                blocks.append(_block(text, filename, offset, page=page_number))
-                offset += len(text) + 1
+                page_text = page.get_text("text")
+                if not page_text.strip():
+                    if ocr._available:
+                        try:
+                            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                            ocr_text = ocr.read_image(pixmap.tobytes("png"))
+                        except Exception:
+                            ocr_text = None
+                        if ocr_text:
+                            page_text = ocr_text
+                        else:
+                            warnings.append(
+                                f"Page {page_number} has no embedded text and OCR produced no text."
+                            )
+                            continue
+                    else:
+                        warnings.append(
+                            f"Page {page_number} has no embedded text; OCR is required."
+                        )
+                        continue
+
+                merged_lines = _merge_text_lines(page_text)
+                for line_no, line in enumerate(merged_lines, start=1):
+                    blocks.append(
+                        _block(
+                            line,
+                            filename,
+                            offset,
+                            page=page_number,
+                            cell_range=f"L{line_no}",
+                            kind="line",
+                        )
+                    )
+                    offset += len(line) + 1
         return ExtractedDocument(
             filename=filename,
             parser="pymupdf",
@@ -157,12 +245,122 @@ class XlsxExtractor:
         return ExtractedDocument(filename=filename, parser="openpyxl", blocks=blocks)
 
 
+class DoclingExtractor:
+    extensions = frozenset({".pdf"})
+
+    def __init__(self) -> None:
+        import importlib
+
+        self._converter: Any | None = None
+        try:
+            docling_mod = importlib.import_module("docling.document_converter")
+            converter = docling_mod.DocumentConverter
+        except Exception:
+            self.extensions = frozenset()
+        else:
+            self._converter = converter
+
+    def extract(self, filename: str, content: bytes) -> ExtractedDocument:
+        import os
+        import tempfile
+
+        if self._converter is None:
+            raise UnsupportedDocumentError("Docling is not installed.")
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        try:
+            result = self._converter().convert(tmp_path)
+            doc = result.document
+            page_contents: dict[int, list[str]] = {}
+            for item in doc.texts:
+                if not item.text:
+                    continue
+                page = item.prov[0].page if item.prov else 1
+                page_contents.setdefault(page, []).append(item.text)
+            for table in doc.tables:
+                table_md = table.export_to_markdown(doc)
+                if not table_md:
+                    continue
+                page = table.prov[0].page if table.prov else 1
+                page_contents.setdefault(page, []).append(table_md)
+
+            blocks: list[ExtractedBlock] = []
+            offset = 0
+            for page in sorted(page_contents):
+                page_text = "\n".join(page_contents[page])
+                blocks.append(
+                    _block(
+                        page_text,
+                        filename,
+                        offset,
+                        page=page,
+                        kind="docling-page",
+                    )
+                )
+                offset += len(page_text) + 1
+            return ExtractedDocument(
+                filename=filename,
+                parser="docling",
+                blocks=blocks,
+                warnings=[],
+            )
+        except Exception as exc:
+            raise UnsupportedDocumentError(f"Docling conversion failed: {exc}") from exc
+        finally:
+            os.unlink(tmp_path)
+
+
+class ImageExtractor:
+    extensions = frozenset({".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif"})
+
+    def extract(self, filename: str, content: bytes) -> ExtractedDocument:
+        ocr = _OcrHelper()
+        if not ocr._available:
+            raise UnsupportedDocumentError(
+                "OCR is not installed. Add the [ocr] optional dependency group."
+            )
+
+        text = ocr.read_image(content)
+        warnings: list[str] = []
+        if not text:
+            warnings.append("No text was detected in the image.")
+
+        blocks: list[ExtractedBlock] = []
+        offset = 0
+        if text:
+            merged_lines = _merge_text_lines(text)
+            for line_no, line in enumerate(merged_lines, start=1):
+                blocks.append(
+                    _block(
+                        line,
+                        filename,
+                        offset,
+                        page=1,
+                        cell_range=f"L{line_no}",
+                        kind="ocr-line",
+                    )
+                )
+                offset += len(line) + 1
+
+        return ExtractedDocument(
+            filename=filename,
+            parser="ocr",
+            blocks=blocks,
+            warnings=warnings,
+        )
+
+
 class ExtractorRegistry:
     def __init__(self, extractors: list[Extractor] | None = None) -> None:
         self._extractors = extractors or [
             PlainTextExtractor(),
             CsvExtractor(),
+            DoclingExtractor(),
             PdfExtractor(),
+            ImageExtractor(),
             DocxExtractor(),
             XlsxExtractor(),
         ]
@@ -175,7 +373,10 @@ class ExtractorRegistry:
         extension = Path(filename).suffix.lower()
         for extractor in self._extractors:
             if extension in extractor.extensions:
-                return extractor.extract(filename, content)
+                try:
+                    return extractor.extract(filename, content)
+                except UnsupportedDocumentError:
+                    continue
         supported = ", ".join(sorted(self.supported_extensions))
         raise UnsupportedDocumentError(
             f"Unsupported file type {extension!r}; expected {supported}."

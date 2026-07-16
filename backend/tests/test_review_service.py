@@ -31,3 +31,24 @@ async def test_marks_unreadable_pdf_as_failed() -> None:
     assert failed.status == ReviewStatus.FAILED
     assert failed.error
 
+
+async def test_approve_and_reject_review() -> None:
+    repository = MemoryReviewRepository()
+    service = ReviewService(repository)
+    content = b"Revenue,100000\nNet income,12000\n"
+
+    queued = await service.enqueue("p-and-l.csv", "text/csv", content)
+    await service.process(queued.id, content)
+
+    approved = await service.approve(queued.id, "looks good")
+    assert approved is not None
+    assert approved.status == ReviewStatus.COMPLETED
+    assert approved.human_decision == "approved"
+    assert approved.human_feedback == "looks good"
+
+    rejected = await service.reject(queued.id, "missing cost of goods sold")
+    assert rejected is not None
+    assert rejected.status == ReviewStatus.REJECTED
+    assert rejected.human_decision == "rejected"
+    assert rejected.human_feedback == "missing cost of goods sold"
+
