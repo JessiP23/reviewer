@@ -55,6 +55,8 @@ class Metric(BaseModel):
     period: str | None = None
     confidence: float = Field(default=1, ge=0, le=1)
     evidence: list[Evidence] = Field(default_factory=list)
+    raw: str | None = None
+    status: str | None = None
 
 
 class ExtractionDiagnostic(BaseModel):

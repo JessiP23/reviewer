@@ -18,6 +18,8 @@ type ReviewType {
   ruleVersion: String!
   createdAt: DateTime!
   updatedAt: DateTime!
+  humanFeedback: String
+  humanDecision: String
 }
 
 type FindingType {
@@ -38,6 +40,9 @@ type MetricType {
   value: Float!
   unit: String!
   confidence: Float!
+  raw: String
+  status: String
+  period: String
   evidence: [EvidenceType!]!
 }
 

@@ -17,7 +17,7 @@ class EvidenceType:
     source: str
     page: int | None
     sheet: str | None
-    cell_range: str | None
+    cell_range: str | None = strawberry.field(name="cellRange")
 
     @classmethod
     def from_domain(cls, evidence: Evidence) -> EvidenceType:
@@ -40,7 +40,7 @@ class FindingType:
     recommendation: str
     confidence: float
     evidence: list[EvidenceType]
-    requires_human_review: bool
+    requires_human_review: bool = strawberry.field(name="requiresHumanReview")
 
     @classmethod
     def from_domain(cls, finding: Finding) -> FindingType:
@@ -63,8 +63,11 @@ class MetricType:
     label: str
     value: float
     unit: str
+    period: str | None
     confidence: float
     evidence: list[EvidenceType]
+    raw: str | None
+    status: str | None
 
     @classmethod
     def from_domain(cls, metric: Metric) -> MetricType:
@@ -73,8 +76,11 @@ class MetricType:
             label=metric.label,
             value=metric.value,
             unit=metric.unit,
+            period=metric.period,
             confidence=metric.confidence,
             evidence=[EvidenceType.from_domain(item) for item in metric.evidence],
+            raw=metric.raw,
+            status=metric.status,
         )
 
 
@@ -106,11 +112,11 @@ class ReviewType:
     metrics: list[MetricType]
     diagnostics: DiagnosticType | None
     error: str | None
-    human_feedback: str | None
-    human_decision: str | None
-    rule_version: str
-    created_at: datetime
-    updated_at: datetime
+    human_feedback: str | None = strawberry.field(name="humanFeedback")
+    human_decision: str | None = strawberry.field(name="humanDecision")
+    rule_version: str = strawberry.field(name="ruleVersion")
+    created_at: datetime = strawberry.field(name="createdAt")
+    updated_at: datetime = strawberry.field(name="updatedAt")
 
     @classmethod
     def from_domain(cls, review: Review) -> ReviewType:

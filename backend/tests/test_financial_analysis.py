@@ -89,7 +89,7 @@ def test_pdf_line_level_extraction_and_analysis() -> None:
 
     values = {metric.key: metric.value for metric in metrics}
     assert values["revenue"] == 1_000
-    assert values["cogs"] == 500
+    assert values["cogs"] == -500
     assert values["gross_profit"] == 500
     assert values["total_assets"] == 5_000
     assert values["total_liabilities"] == 2_000

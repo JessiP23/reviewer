@@ -24,13 +24,13 @@ Python service: FastAPI, Strawberry GraphQL, SQLAlchemy, Pydantic, typed extract
 
 Key files and modules:
 
-- `src/reviewer/api/` — REST (`rest.py`) and GraphQL (`graphql.py`) adapters. `rest.py` now exposes `/v1/reviews/{id}/approve` and `/reject` for HITL.
+- `src/reviewer/api/` — REST (`rest.py`) and GraphQL (`graphql.py`) adapters. `rest.py` exposes `/v1/reviews/{id}/approve` and `/reject` for HITL.
 - `src/reviewer/application/` — `ReviewService` and ports. `service.py` is the orchestrator; `ports.py` is the repository interface.
 - `src/reviewer/extraction/` — `ExtractorRegistry` and extractor implementations.
   - `extractors.py`: `PlainTextExtractor`, `CsvExtractor`, `PdfExtractor`, `DoclingExtractor`, `ImageExtractor`, `DocxExtractor`, `XlsxExtractor`.
   - `PdfExtractor` uses PyMuPDF line extraction, merges wrapped labels and number lines, and falls back to OCR for scanned pages.
   - `ImageExtractor` OCRs PNG/JPG/TIFF/BMP/GIF files using the optional `[ocr]` dependency group.
-- `src/reviewer/analysis/` — `financial.py` contains `extract_metrics`, derived metrics, and numeric rules. `llm.py` is an optional evidence-gated model adapter.
+- `src/reviewer/analysis/` — `schema_engine.py` is the document-agnostic financial extraction and risk engine. `financial.py` is now a backward-compatible re-export wrapper. `llm.py` is an optional evidence-gated model adapter.
 - `src/reviewer/domain/` — `Review`, `Finding`, `Metric`, `Evidence`, etc. No framework imports.
 - `src/reviewer/infra/` — `SqlReviewRepository`, `MemoryReviewRepository`, `ReviewDispatcher`, S3/SQS/AWS adapters for cloud.
 - `main.py` — FastAPI app entry point. `lambda_api.py` / `lambda_worker.py` — AWS Lambda packaging.
@@ -126,12 +126,13 @@ If `DoclingExtractor` fails, the registry falls back to `PdfExtractor`. If `Imag
 
 ### 4.3 Analysis
 
-`financial.analyze` runs:
+`schema_engine.analyze` (re-exported through `financial.analyze`) runs:
 
-- `extract_metrics` — per page, first number after each label.
-- `add_derived_metrics` — `total_liabilities` from `total_liabilities_and_equity - equity`, `current_ratio`, `debt_to_equity`, `net_margin`, `gross_margin`.
-- `run_numeric_rules` — balance-sheet reconciliation, gross-profit check, liquidity, leverage, etc.
-- `extract_text_findings` — PII, going-concern language, material weakness.
+- `extract_metrics` — scans each `ExtractedBlock` for label/value pairs and table rows, then links every label to a standard account in the chart of accounts using fuzzy alias matching.
+- `add_derived_metrics` — computes ratios and totals such as `current_ratio`, `debt_to_equity`, `net_margin`, `gross_margin`, and imputed totals like `total_liabilities` when only a combined line is present.
+- `numeric_rules` — cross-validates accounting equations (balance-sheet reconciliation, gross-profit reconciliation, liquidity, leverage) and raises risk findings.
+- `_text_rules` — flags textual risk signals (going-concern language, material weakness, adverse opinion, liquidity stress, negative-tax language).
+- `_quality_findings` — HITL flags for low-confidence matches, parenthetical sign conflicts, and ambiguous number formatting.
 
 The `ReviewService` then checks `requires_human_review` or `severity` and sets `needs_review` accordingly.
 
@@ -242,10 +243,12 @@ API Gateway -> FastAPI Lambda
 ## 8. Current model and data accuracy
 
 - The deterministic financial checks are the source of truth. LLM findings are optional, capped at 85% confidence, and require human review.
-- `extract_metrics` deduplicates per page and picks the first number after a label.
-- Derived metrics (`total_liabilities`, `current_ratio`, `debt_to_equity`, etc.) are computed from extracted values.
+- `extract_metrics` is now chart-of-accounts driven. It normalizes labels, matches them against a canonical concept/alias list with `SequenceMatcher` + token overlap, and uses the best alias above a confidence threshold.
+- Multi-period table headers are detected from `table-row` blocks and attached to each metric as `period`.
+- Number parsing handles currency symbols, thousands separators, `k`/`m`/`b`/`t` suffixes, parentheses for negatives, and label-based loss/deficit keywords.
+- Derived metrics (`current_ratio`, `debt_to_equity`, `net_margin`, `gross_margin`, imputed `total_liabilities`) are computed from extracted values per period.
 - The `total_liabilities` and `equity` patterns avoid matching the `Total liabilities and owners' equity` sum line.
-- `gross_profit` check uses `abs(cogs)` for parenthetical COGS values.
+- `gross_profit` check uses `abs(cogs)` so the validation tolerates both `700,000` and `(500)` presentations.
 
 ### End-to-end testing with non-PDFs
 
@@ -268,6 +271,21 @@ metrics, findings = analyze(doc)
 ```
 
 For scanned PDFs, create a PDF with embedded image text and verify `parser == "pymupdf"` and the OCR line blocks appear.
+
+### Chatbot UI output fields
+
+`Metric` and `MetricType` now expose:
+
+- `period`: the detected period header, e.g. `2025`, `2025 Q1`, or `2025-12`.
+- `raw`: the literal text value extracted from the document.
+- `status`: one of `verified`, `inferred`, or `flagged_discrepancy`.
+- `confidence`: 0–1 score based on alias match and sign/format risk flags.
+
+`Finding` and `FindingType` expose:
+
+- `code`, `title`, `category`, `severity`, `explanation`, `recommendation`, `evidence`, and `requires_human_review`.
+
+The `ReviewService` sets `status = "needs_review"` when any finding has `requires_human_review = True` or `severity` is `CRITICAL` / `HIGH`. The chatbot UI should poll `review(id: ...)` and block downstream actions until the user approves or rejects.
 
 ## 9. Known risks and next steps
 
