@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     job_backend: Literal["in-process", "sqs"] = "in-process"
     aws_region: str = "us-east-2"
     document_bucket: str | None = None
+    document_store_path: str = "./document_store"
     review_queue_url: str | None = None
     rds_cluster_arn: str | None = None
     rds_secret_arn: str | None = None

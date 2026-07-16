@@ -80,6 +80,7 @@ class Review(BaseModel):
     error: str | None = None
     human_feedback: str | None = None
     human_decision: str | None = None
+    document_key: str | None = None
     rule_version: str = "financial-core/1.0.0"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

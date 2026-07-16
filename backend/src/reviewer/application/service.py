@@ -8,6 +8,7 @@ from reviewer.analysis.llm import FindingAnalyzer
 from reviewer.application.ports import ReviewRepository
 from reviewer.domain.models import ExtractionDiagnostic, Review, ReviewStatus, Severity
 from reviewer.extraction import ExtractorRegistry
+from reviewer.infra.document_store import DocumentStore
 
 
 class ReviewService:
@@ -16,10 +17,12 @@ class ReviewService:
         repository: ReviewRepository,
         extractors: ExtractorRegistry | None = None,
         model_analyzer: FindingAnalyzer | None = None,
+        document_store: DocumentStore | None = None,
     ) -> None:
         self._repository = repository
         self._extractors = extractors or ExtractorRegistry()
         self._model_analyzer = model_analyzer
+        self._document_store = document_store
 
     @property
     def supported_extensions(self) -> set[str]:
@@ -32,6 +35,8 @@ class ReviewService:
             sha256=hashlib.sha256(content).hexdigest(),
             rule_version=RULE_VERSION,
         )
+        if self._document_store is not None:
+            review.document_key = await self._document_store.store(review.id, filename, content)
         return await self._repository.create(review)
 
     async def process(self, review_id: str, content: bytes) -> None:

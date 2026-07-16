@@ -50,3 +50,38 @@ def test_rejects_unsupported_and_empty_files() -> None:
         assert unsupported.status_code == 415
         assert empty.status_code == 400
 
+
+def test_chat_and_document_endpoints() -> None:
+    content = b"Revenue,100000\nNet income,12000\n"
+    with TestClient(app) as client:
+        accepted = client.post(
+            "/v1/reviews",
+            files={"file": ("financials.csv", content, "text/csv")},
+        )
+        assert accepted.status_code == 202
+        review_id = accepted.json()["id"]
+
+        chat = client.post(
+            f"/v1/reviews/{review_id}/chat",
+            json={"message": "What is revenue?"},
+        )
+        assert chat.status_code == 200
+        reply = chat.json()["reply"]
+        assert "100,000" in reply
+
+        doc = client.get(f"/v1/reviews/{review_id}/document")
+        assert doc.status_code == 200
+        assert doc.content == content
+        assert "financials.csv" in doc.headers["content-disposition"]
+
+
+def test_chat_and_document_not_found() -> None:
+    with TestClient(app) as client:
+        chat = client.post(
+            "/v1/reviews/does-not-exist/chat",
+            json={"message": "What is revenue?"},
+        )
+        assert chat.status_code == 404
+        doc = client.get("/v1/reviews/does-not-exist/document")
+        assert doc.status_code == 404
+

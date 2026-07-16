@@ -6,14 +6,16 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from reviewer.application import ReviewService
+from reviewer.application.chat_service import ReviewChatService
 from reviewer.application.jobs import ReviewDispatcher
 from reviewer.config import Settings
 from reviewer.domain.models import ReviewStatus
+from reviewer.infra.document_store import DocumentStore
 
 router = APIRouter(prefix="/v1")
 
@@ -25,6 +27,14 @@ class ReviewAccepted(BaseModel):
 
 class HumanReviewRequest(BaseModel):
     feedback: str | None = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+class ChatResponse(BaseModel):
+    reply: str
 
 
 @router.post("/reviews", response_model=ReviewAccepted, status_code=status.HTTP_202_ACCEPTED)
@@ -117,3 +127,37 @@ async def reject_review(
     if review is None:
         raise HTTPException(status_code=404, detail="Review not found.")
     return ReviewAccepted(id=review.id, status=review.status)
+
+
+@router.get("/reviews/{review_id}/document")
+async def get_review_document(request: Request, review_id: str) -> Response:
+    service: ReviewService = request.app.state.review_service
+    document_store: DocumentStore = request.app.state.document_store
+    review = await service.get(review_id)
+    if review is None or not review.document_key:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    content = await document_store.retrieve(review.document_key)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    filename = Path(review.filename).name
+    content_type = document_store.content_type(filename)
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f"inline; filename={filename!r}"},
+    )
+
+
+@router.post("/reviews/{review_id}/chat")
+async def chat_with_review(
+    request: Request,
+    review_id: str,
+    body: ChatRequest,
+) -> ChatResponse:
+    service: ReviewService = request.app.state.review_service
+    chat_service: ReviewChatService = request.app.state.chat_service
+    review = await service.get(review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found.")
+    reply = await chat_service.answer(review, body.message)
+    return ChatResponse(reply=reply)

@@ -874,7 +874,8 @@ def _extraction_warning_findings(document: ExtractedDocument) -> list[Finding]:
                 "extraction-quality",
                 Severity.MEDIUM,
                 warning,
-                "Re-export the document with selectable text or use a higher-resolution scan, then re-upload.",
+                "Re-export the document with selectable text or use a "
+                "higher-resolution scan, then re-upload.",
                 [_evidence(document.blocks[0])] if document.blocks else [],
                 requires_human_review=True,
             )

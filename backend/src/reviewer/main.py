@@ -8,7 +8,9 @@ from reviewer.analysis.llm import OpenAICompatibleAnalyzer
 from reviewer.api.graphql import graphql_router
 from reviewer.api.rest import router as rest_router
 from reviewer.application import ReviewService
+from reviewer.application.chat_service import ReviewChatService
 from reviewer.config import get_settings
+from reviewer.infra.document_store import FilesystemDocumentStore
 from reviewer.infra.runtime import create_runtime
 
 
@@ -19,6 +21,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.runtime = runtime
     app.state.review_dispatcher = runtime.dispatcher
+
+    document_store = FilesystemDocumentStore(settings.document_store_path)
+    app.state.document_store = document_store
+
     model_analyzer = (
         OpenAICompatibleAnalyzer(
             base_url=settings.llm_base_url,
@@ -28,9 +34,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.llm_base_url and settings.llm_model
         else None
     )
-    app.state.review_service = ReviewService(
-        runtime.repository, model_analyzer=model_analyzer
+    review_service = ReviewService(
+        runtime.repository,
+        model_analyzer=model_analyzer,
+        document_store=document_store,
     )
+    app.state.review_service = review_service
+    app.state.chat_service = ReviewChatService()
     yield
     await runtime.close()
 
